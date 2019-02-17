@@ -1826,11 +1826,13 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
     List           *commands = NIL;
     bool           import_default = false;
     bool           import_not_null = true;
+    bool           auto_create_enums = false;
     ForeignServer  *server;
     UserMapping    *user;
     mysql_opt      *options = NULL;
     MYSQL          *conn;
     StringInfoData buf;
+    StringInfoData buf_enums;
     MYSQL_RES      *volatile res = NULL;
     MYSQL_ROW      row;
     ListCell       *lc;
@@ -1845,6 +1847,8 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
             import_default = defGetBoolean(def);
         else if (strcmp(def->defname, "import_not_null") == 0)
             import_not_null = defGetBoolean(def);
+        else if (strcmp(def->defname, "auto_create_enums") == 0)
+            auto_create_enums = defGetBoolean(def);
         else
             ereport(ERROR,
                     (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
@@ -1862,6 +1866,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 
     /* Create workspace for strings */
     initStringInfo(&buf);
+    initStringInfo(&buf_enums);
 
     /* Check that the schema really exists */
     appendStringInfo(&buf, "SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = '%s'", stmt->remote_schema);
@@ -2030,19 +2035,29 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
             attname = row[1];
             typename = row[2];
 
-		if (strcmp(typename,"char") == 0 || strcmp(typename,"varchar") == 0)
-		typename = row[3];
+            if (strcmp(typename,"char") == 0 || strcmp(typename,"varchar") == 0)
+              typename = row[3];
 
             typedfn = row[3];
             attnotnull = row[4];
             attdefault = row[5] == NULL ? (char *) NULL : row[5];
 
             if (strncmp(typedfn, "enum(", 5) == 0)
-                ereport(NOTICE, (errmsg("If you encounter an error, you may need to execute the following first:\n"
-                                        "DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typname = '%s') THEN CREATE TYPE %s AS %s; END IF; END$$;\n",
-                                        typename,
-                                        typename,
-                                        typedfn)));
+            {
+              resetStringInfo(&buf_enums);
+              appendStringInfo(&buf_enums, "DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typname = '%s') THEN CREATE TYPE %s AS %s; END IF; END$$;\n",
+                               typename,
+                               typename,
+                               typedfn);
+              if (auto_create_enums == true)
+              {
+                commands = lappend(commands, pstrdup(buf_enums.data));
+              }
+              else
+              {
+                ereport(NOTICE, (errmsg("If you encounter an error, you may need to execute the following first:\n%s", buf_enums.data)));
+              }
+            }
 
             if (first_item)
                 first_item = false;
@@ -2081,6 +2096,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
     /* Clean up */
     _mysql_free_result(res);
     res = NULL;
+    resetStringInfo(&buf_enums);
     resetStringInfo(&buf);
 
     mysql_rel_connection(conn);
