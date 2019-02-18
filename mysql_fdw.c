@@ -1826,6 +1826,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
     List           *commands = NIL;
     bool           import_default = false;
     bool           import_not_null = true;
+    bool           enums_to_text = false;
     bool           auto_create_enums = false;
     ForeignServer  *server;
     UserMapping    *user;
@@ -1849,6 +1850,8 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
             import_not_null = defGetBoolean(def);
         else if (strcmp(def->defname, "auto_create_enums") == 0)
             auto_create_enums = defGetBoolean(def);
+        else if (strcmp(def->defname, "enums_to_text") == 0)
+            enums_to_text = defGetBoolean(def);
         else
             ereport(ERROR,
                     (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
@@ -1919,7 +1922,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
                      "  t.TABLE_NAME,"
                      "  c.COLUMN_NAME,"
                      "  CASE"
-                     "    WHEN c.DATA_TYPE = 'enum' THEN LOWER(CONCAT('\"', CONCAT(t.TABLE_NAME, CONCAT('_', CONCAT(c.COLUMN_NAME, '_t\"')))))"
+                     "    WHEN c.DATA_TYPE = 'enum' THEN '%s'"
                      "    WHEN c.DATA_TYPE = 'tinyint' THEN 'smallint'"
                      "    WHEN c.DATA_TYPE = 'mediumint' THEN 'integer'"
                      "    WHEN c.DATA_TYPE = 'tinyint unsigned' THEN 'smallint'"
@@ -1936,11 +1939,13 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
                      "    WHEN c.DATA_TYPE = 'blob' THEN 'bytea'"
                      "    WHEN c.DATA_TYPE = 'mediumblob' THEN 'bytea'"
                      "    WHEN c.DATA_TYPE = 'longblob' THEN 'bytea'"
+                     "    WHEN c.DATA_TYPE = 'binary' THEN 'bytea'"
                      "    ELSE c.DATA_TYPE"
                      "  END,"
                      "  c.COLUMN_TYPE,"
                      "  IF(c.IS_NULLABLE = 'NO', 't', 'f'),"
-                     "  c.COLUMN_DEFAULT"
+                     "  c.COLUMN_DEFAULT,"
+                     "  CONCAT(t.TABLE_SCHEMA, CONCAT('_', c.TABLE_NAME))"
                      " FROM"
                      "  information_schema.TABLES AS t"
                      " JOIN"
@@ -1949,6 +1954,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
                      "  t.TABLE_CATALOG <=> c.TABLE_CATALOG AND t.TABLE_SCHEMA <=> c.TABLE_SCHEMA AND t.TABLE_NAME <=> c.TABLE_NAME"
                      " WHERE"
                      "  t.TABLE_SCHEMA = '%s'",
+                     (enums_to_text) ? "text" : "CONCAT(t.TABLE_SCHEMA, CONCAT('_', CONCAT(t.TABLE_NAME, CONCAT('_', CONCAT(c.COLUMN_NAME, '_t')))))",
                      stmt->remote_schema);
 
     /* Apply restrictions for LIMIT TO and EXCEPT */
@@ -2013,11 +2019,12 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
     while (row)
     {
         char *tablename = row[0];
+        char *newtablename = row[6];
         bool first_item = true;
 
         resetStringInfo(&buf);
         appendStringInfo(&buf, "CREATE FOREIGN TABLE %s (\n",
-                         quote_identifier(tablename));
+                         quote_identifier(newtablename));
 
         /* Scan all rows for this table */
         do
