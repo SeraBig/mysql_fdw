@@ -1919,7 +1919,7 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
                      "  t.TABLE_NAME,"
                      "  c.COLUMN_NAME,"
                      "  CASE"
-                     "    WHEN c.DATA_TYPE = 'enum' THEN LOWER(CONCAT(c.COLUMN_NAME, '_t'))"
+                     "    WHEN c.DATA_TYPE = 'enum' THEN LOWER(CONCAT('\"', CONCAT(t.TABLE_NAME, CONCAT('_', CONCAT(c.COLUMN_NAME, '_t\"')))))"
                      "    WHEN c.DATA_TYPE = 'tinyint' THEN 'smallint'"
                      "    WHEN c.DATA_TYPE = 'mediumint' THEN 'integer'"
                      "    WHEN c.DATA_TYPE = 'tinyint unsigned' THEN 'smallint'"
@@ -2049,13 +2049,10 @@ mysqlImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
                                typename,
                                typename,
                                typedfn);
-              if (auto_create_enums == true)
+              ereport(NOTICE, (errmsg("If you encounter an error, you may need to execute the following first:\n%s", buf_enums.data)));
+              if (auto_create_enums)
               {
                 commands = lappend(commands, pstrdup(buf_enums.data));
-              }
-              else
-              {
-                ereport(NOTICE, (errmsg("If you encounter an error, you may need to execute the following first:\n%s", buf_enums.data)));
               }
             }
 
